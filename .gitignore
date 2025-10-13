@@ -1,0 +1,5 @@
+data/
+checkpoints/
+cd2020/
+*.pt
+__pycache__/
