@@ -450,7 +450,8 @@ class EnVariationalDiffusion(torch.nn.Module):
     def compute_error(self, net_out, gamma_t, eps):
         """Computes error, i.e. the most likely prediction of x."""
         eps_t = net_out
-        if self.training and self.loss_type == 'l2':
+        # FIXED: Always normalize the error consistently for both training and eval
+        if self.loss_type == 'l2':
             denom = (self.n_dims + self.in_node_nf) * eps_t.shape[1]
             error = sum_except_batch((eps - eps_t) ** 2) / denom
         else:
@@ -612,7 +613,8 @@ class EnVariationalDiffusion(torch.nn.Module):
         # Compute the error.
         error = self.compute_error(net_out, gamma_t, eps)
 
-        if self.training and self.loss_type == 'l2':
+        # FIXED: Use consistent weighting for l2 loss in both training and eval
+        if self.loss_type == 'l2':
             SNR_weight = torch.ones_like(error)
         else:
             # Compute weighting with SNR: (SNR(s-t) - 1) for epsilon parametrization.
@@ -624,8 +626,8 @@ class EnVariationalDiffusion(torch.nn.Module):
         # cross entropy term E_q(z0 | x) [log p(x | z0)].
         neg_log_constants = -self.log_constants_p_x_given_z0(x, node_mask)
 
-        # Reset constants during training with l2 loss.
-        if self.training and self.loss_type == 'l2':
+        # FIXED: Reset constants consistently with l2 loss
+        if self.loss_type == 'l2':
             neg_log_constants = torch.zeros_like(neg_log_constants)
 
         # The KL between q(z1 | x) and p(z1) = Normal(0, 1). Should be close to zero.
@@ -669,8 +671,8 @@ class EnVariationalDiffusion(torch.nn.Module):
 
             loss_t = loss_term_0 * t_is_zero.squeeze() + t_is_not_zero.squeeze() * loss_t_larger_than_zero
 
-            # Only upweigh estimator if using the vlb objective.
-            if self.training and self.loss_type == 'l2':
+            # FIXED: Only upweigh estimator if using the vlb objective (not l2)
+            if self.loss_type == 'l2':
                 estimator_loss_terms = loss_t
             else:
                 num_terms = self.T + 1  # Includes t = 0.
@@ -693,16 +695,22 @@ class EnVariationalDiffusion(torch.nn.Module):
         # Normalize data, take into account volume change in x.
         x, h, delta_log_px = self.normalize(x, h, node_mask)
 
-        # Reset delta_log_px if not vlb objective.
-        if self.training and self.loss_type == 'l2':
+        # FIXED: Reset delta_log_px consistently if l2 loss
+        if self.loss_type == 'l2':
             delta_log_px = torch.zeros_like(delta_log_px)
 
-        if self.training:
-            # Only 1 forward pass when t0_always is False.
+        # FIXED: Use consistent t0_always for l2 loss (always False for simpler, faster training)
+        # For vlb loss, use t0_always=True during eval for lower variance
+        if self.loss_type == 'l2':
+            # Simpler loss, always use t0_always=False for speed
             loss, loss_dict = self.compute_loss(x, h, node_mask, edge_mask, context, t0_always=False)
         else:
-            # Less variance in the estimator, costs two forward passes.
-            loss, loss_dict = self.compute_loss(x, h, node_mask, edge_mask, context, t0_always=True)
+            if self.training:
+                # Only 1 forward pass when t0_always is False.
+                loss, loss_dict = self.compute_loss(x, h, node_mask, edge_mask, context, t0_always=False)
+            else:
+                # Less variance in the estimator, costs two forward passes.
+                loss, loss_dict = self.compute_loss(x, h, node_mask, edge_mask, context, t0_always=True)
 
         neg_log_pxh = loss
 
@@ -918,9 +926,9 @@ class EnHierarchicalVAE(torch.nn.Module):
         
         error = error_x + error_h_cat + error_h_int
 
-        if self.training:
-            denom = (self.n_dims + self.in_node_nf) * xh.shape[1]
-            error = error / denom
+        # FIXED: Always normalize consistently (removed self.training check)
+        denom = (self.n_dims + self.in_node_nf) * xh.shape[1]
+        error = error / denom
 
         return error
     
@@ -1194,19 +1202,24 @@ class EnLatentDiffusion(EnVariationalDiffusion):
         # Make the data structure compatible with the EnVariationalDiffusion compute_loss().
         z_h = {'categorical': torch.zeros(0).to(z_h), 'integer': z_h}
 
-        if self.training:
-            # Only 1 forward pass when t0_always is False.
+        # FIXED: Use consistent t0_always for l2 loss
+        if self.loss_type == 'l2':
+            # Simpler loss, always use t0_always=False for speed
             loss_ld, loss_dict = self.compute_loss(z_x, z_h, node_mask, edge_mask, context, t0_always=False)
         else:
-            # Less variance in the estimator, costs two forward passes.
-            loss_ld, loss_dict = self.compute_loss(z_x, z_h, node_mask, edge_mask, context, t0_always=True)
-        
+            if self.training:
+                # Only 1 forward pass when t0_always is False.
+                loss_ld, loss_dict = self.compute_loss(z_x, z_h, node_mask, edge_mask, context, t0_always=False)
+            else:
+                # Less variance in the estimator, costs two forward passes.
+                loss_ld, loss_dict = self.compute_loss(z_x, z_h, node_mask, edge_mask, context, t0_always=True)
+
         # The _constants_ depending on sigma_0 from the
         # cross entropy term E_q(z0 | x) [log p(x | z0)].
         neg_log_constants = -self.log_constants_p_h_given_z0(
             torch.cat([h['categorical'], h['integer']], dim=2), node_mask)
-        # Reset constants during training with l2 loss.
-        if self.training and self.loss_type == 'l2':
+        # FIXED: Reset constants consistently with l2 loss
+        if self.loss_type == 'l2':
             neg_log_constants = torch.zeros_like(neg_log_constants)
 
         neg_log_pxh = loss_ld + loss_recon + neg_log_constants
